@@ -11,6 +11,7 @@ use shadow_tls::{
 };
 
 use serde::Deserialize;
+use crate::Commands::Client;
 
 #[derive(Parser, Debug, Deserialize)]
 #[clap(
@@ -19,7 +20,7 @@ use serde::Deserialize;
     about,
     long_about = "A proxy to expose real tls handshake to the firewall.\nGithub: github.com/ihciah/shadow-tls"
 )]
-struct Args {
+pub struct Args {
     #[clap(subcommand)]
     #[serde(flatten)]
     cmd: Commands,
@@ -300,6 +301,20 @@ pub(crate) fn get_sip003_arg() -> Option<Args> {
     Some(args)
 }
 
+fn test_client_args() -> Args {
+    let args = Args {
+        cmd: Client {
+            listen: "127.0.0.1:666".to_string(),
+            server_addr: "127.0.0.1:4432".to_string(),
+            tls_names: TlsNames::try_from("captive.apple.com").unwrap(),
+            password: "pwd1".to_string(),
+            alpn: None,
+        },
+        opts: Default::default(),
+    };
+    args
+}
+
 fn main() {
     tracing_subscriber::registry()
         .with(fmt::layer())
@@ -310,7 +325,8 @@ fn main() {
                 .add_directive("rustls=off".parse().unwrap()),
         )
         .init();
-    let mut args = get_sip003_arg().unwrap_or_else(Args::parse);
+    // let mut args = get_sip003_arg().unwrap_or_else(Args::parse);
+    let mut args = test_client_args();
     if let Commands::Config { config } = args.cmd {
         args = read_config_file(config.to_str().unwrap().to_string());
     }
