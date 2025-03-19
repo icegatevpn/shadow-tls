@@ -6,11 +6,11 @@ services:
     restart: always
     network_mode: "host"
     environment:
-      - MODE=
-      - LISTEN=
-      - SERVER=
-      - TLS=
-      - PASSWORD=
+      - MODE=server
+      - LISTEN=127.0.0.1:4432
+      - SERVER=127.0.0.1:8888
+      - TLS=captive.apple.com
+      - PASSWORD=pwd1
 
 # Available environs:
 # MODE: client or server

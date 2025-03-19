@@ -161,6 +161,7 @@ impl ShadowTlsServer {
 impl ShadowTlsServer {
     /// Serve a raw connection.
     pub async fn serve(self) -> anyhow::Result<()> {
+        tracing::debug!("listening on {}", self.listen_addr);
         let listener = bind_with_pretty_error(self.listen_addr.as_ref(), self.fastopen)?;
         let shared = Rc::new(self);
         loop {

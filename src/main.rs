@@ -325,8 +325,8 @@ fn main() {
                 .add_directive("rustls=off".parse().unwrap()),
         )
         .init();
-    // let mut args = get_sip003_arg().unwrap_or_else(Args::parse);
-    let mut args = test_client_args();
+    let mut args = get_sip003_arg().unwrap_or_else(Args::parse);
+    // let mut args = test_client_args();
     if let Commands::Config { config } = args.cmd {
         args = read_config_file(config.to_str().unwrap().to_string());
     }
