@@ -9,9 +9,19 @@ readme = "README.md"
 repository = "https://github.com/ihciah/shadow-tls"
 version = "0.2.25"
 
+#[lib]
+#name = "shadow_tls"
+#crate-type = ["cdylib"]
+#
+#[[bin]]
+#name = "shadow-tls"
+#path = "src/main.rs"
+
 [dependencies]
-monoio = { version = "0.2.0", features = ["sync"] }
-monoio-rustls-fork-shadow-tls = { version = "0.3.0-mod.2" }
+#monoio = { version = "0.2.4", features = ["sync"] }
+monoio = { path = "../monoio/monoio", features = ["sync"] }
+#monoio-rustls-fork-shadow-tls = { version = "0.3.0-mod.2" }
+monoio-rustls-fork-shadow-tls = { path = "../monoio-tls/monoio-rustls"}
 rustls-fork-shadow-tls = { version = "0.20.9-mod.2", default-features = false }
 
 anyhow = "1"

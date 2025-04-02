@@ -56,3 +56,10 @@ Also, you may need to [modify some system limitations](https://github.com/byteda
 
 ## License
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fihciah%2Fshadow-tls.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fihciah%2Fshadow-tls?ref=badge_large)
+
+## build for Android:
+export ANDROID_NDK_HOME=~/Library/Android/sdk/ndk/27.0.12077973 \
+cargo ndk --platform 30 --target aarch64-linux-android build --release
+cargo ndk --platform 30 --target armv7-linux-androideabi build --release
+cargo ndk --platform 30 --target x86_64-linux-android build --release
+cargo ndk --platform 30 --target i686-linux-android build --release
