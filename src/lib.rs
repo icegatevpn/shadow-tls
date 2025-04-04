@@ -5,9 +5,14 @@ mod helper_v2;
 mod server;
 pub mod sip003;
 mod util;
+pub mod tokio_relay_v2;
+// pub mod tokio_rustls_fork_shadow_tls;
+pub mod tokio_rustls_fork_shadow_tls_also;
 
-use std::{fmt::Display, thread::JoinHandle};
-
+use std::{fmt::Display, thread, thread::JoinHandle};
+use std::time::Duration;
+use tokio::task;
+use tracing::{info, warn};
 pub use crate::{
     client::{ShadowTlsClient, TlsExtConfig, TlsNames},
     server::{ShadowTlsServer, TlsAddrs},
@@ -114,6 +119,43 @@ impl Display for RunningArgs {
 pub enum Runnable {
     Client(ShadowTlsClient),
     Server(ShadowTlsServer),
+}
+
+pub struct TokioRunnable {
+    inner: Runnable,
+}
+
+impl From<Runnable> for TokioRunnable {
+    fn from(inner: Runnable) -> Self {
+        Self { inner }
+    }
+}
+impl TokioRunnable {
+    pub fn start(&self, parallelism: usize) -> tokio::runtime::Runtime {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(parallelism)
+            .enable_all()
+            .build()
+            .expect("Failed to build Tokio runtime");
+
+        // Clone for each task
+        let runnable = self.inner.clone();
+
+        // Spawn the main server task on the runtime
+        runtime.spawn(async move {
+            match runnable {
+                Runnable::Client(c) => {
+                    c.tokio_serve().await
+                },
+
+                Runnable::Server(s) => {
+                    anyhow::bail!("Server not available on Tokio");
+                }
+            }
+        });
+
+        runtime
+    }
 }
 
 impl Runnable {

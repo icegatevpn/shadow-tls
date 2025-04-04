@@ -4,7 +4,7 @@ use std::{
     ptr::copy_nonoverlapping,
     time::Duration,
 };
-
+use std::os::fd::{AsRawFd, FromRawFd};
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use local_sync::oneshot::{Receiver, Sender};
 use monoio::{
@@ -17,7 +17,7 @@ use hmac::Mac;
 use rand::Rng;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-
+use socket2::TcpKeepalive;
 use prelude::*;
 
 pub(crate) mod prelude {
@@ -129,6 +129,37 @@ pub(crate) fn mod_tcp_conn(conn: &mut TcpStream, keepalive: bool, nodelay: bool)
         );
     }
     let _ = conn.set_nodelay(nodelay);
+}
+
+pub fn tokio_mod_tcp_conn(conn: &mut tokio::net::TcpStream, keepalive: bool, nodelay: bool) -> std::io::Result<()> {
+    let socket = conn.as_raw_fd();
+
+    // Get the socket and apply settings
+    if keepalive {
+        // Tokio doesn't have direct keepalive settings, so we use the socket2 crate
+        let socket = unsafe { socket2::Socket::from_raw_fd(socket as _) };
+
+        socket.set_keepalive(true)?;
+
+        // On some platforms, we need to set keepalive parameters
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            // Set keepalive time (how long the connection needs to be idle before TCP starts sending keepalive probes)
+            let keepalive = TcpKeepalive::new()
+                .with_time(Duration::from_secs(90))
+                .with_interval(Duration::from_secs(90))
+                .with_retries(2);
+            socket.set_tcp_keepalive(&keepalive)?;
+        }
+
+        // Don't close the socket when dropping
+        std::mem::forget(socket);
+    }
+
+    // Set nodelay option
+    conn.set_nodelay(nodelay)?;
+
+    Ok(())
 }
 
 #[derive(Clone)]
