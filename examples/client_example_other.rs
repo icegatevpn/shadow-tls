@@ -27,10 +27,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let tls_name = &args[3];
     let password = &args[4];
 
-    println!("Starting Shadow-TLS client with tokio:");
-    println!("Listening on: {}", listen_addr);
-    println!("Connecting to: {}", server_addr);
-    println!("Using TLS name: {}", tls_name);
+    tracing::trace!("Starting Shadow-TLS client with tokio:");
+    tracing::trace!("Listening on: {}", listen_addr);
+    tracing::trace!("Connecting to: {}", server_addr);
+    tracing::trace!("Using TLS name: {}", tls_name);
 
     // Create and run the relay
     let relay = TokioRelayV2::new(
@@ -89,7 +89,7 @@ async fn connect_tls_with_tokio(
     let hash = io.hash();
     let stream = io.into_inner();
 
-    println!("TLS handshake completed, HMAC: {:?}", hash);
+    tracing::trace!("TLS handshake completed, HMAC: {:?}", hash);
 
     Ok((stream, hash))
 }

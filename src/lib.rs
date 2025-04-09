@@ -5,17 +5,18 @@ mod helper_v2;
 mod server;
 pub mod sip003;
 mod util;
-pub mod tokio_relay_v2;
-// pub mod tokio_rustls_fork_shadow_tls;
+
+// pub mod tokio_relay_v2;
 pub mod tokio_rustls_fork_shadow_tls_also;
 
-use std::{fmt::Display, thread, thread::JoinHandle};
-use std::time::Duration;
-use tokio::task;
-use tracing::{info, warn};
+use std::{fmt::Display, thread::JoinHandle};
+use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
+use tracing::{debug, info};
+
 pub use crate::{
     client::{ShadowTlsClient, TlsExtConfig, TlsNames},
     server::{ShadowTlsServer, TlsAddrs},
+    // tokio_relay_v2::TokioShadowTlsV2Relay,
     util::{V3Mode, WildcardSNI},
 };
 
@@ -83,8 +84,41 @@ impl RunningArgs {
             ))),
         }
     }
-}
 
+    // #[inline]
+    // pub fn build_tokio(self) -> anyhow::Result<TokioRunnable> {
+    //     match self {
+    //         RunningArgs::Client {
+    //             listen_addr,
+    //             target_addr,
+    //             tls_names,
+    //             password,
+    //             nodelay,
+    //             ..
+    //         } => {
+    //             // We need to extract the SNI hostname from tls_names for relay
+    //             let hostname = tls_names.to_string();
+    //             let hostname = hostname.trim_start_matches('[').trim_end_matches(']');
+    //
+    //             // Create the TokioShadowTlsV2Relay
+    //             let relay = TokioShadowTlsV2Relay::new(
+    //                 listen_addr,
+    //                 hostname.to_string(),
+    //                 target_addr,
+    //                 password,
+    //                 nodelay,
+    //             );
+    //
+    //             Ok(TokioRunnable::Client(relay))
+    //         },
+    //         RunningArgs::Server { .. } => {
+    //             Err(anyhow::anyhow!(
+    //                     "Tokio implementation for server is not available yet"
+    //                 ))
+    //         },
+    //     }
+    // }
+}
 impl Display for RunningArgs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -121,42 +155,43 @@ pub enum Runnable {
     Server(ShadowTlsServer),
 }
 
-pub struct TokioRunnable {
-    inner: Runnable,
-}
+// #[derive(Clone)]
+// pub enum TokioRunnable {
+//     Client(TokioShadowTlsV2Relay),
+//     // Add Server variant when implemented
+// }
 
-impl From<Runnable> for TokioRunnable {
-    fn from(inner: Runnable) -> Self {
-        Self { inner }
-    }
-}
-impl TokioRunnable {
-    pub fn start(&self, parallelism: usize) -> tokio::runtime::Runtime {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(parallelism)
-            .enable_all()
-            .build()
-            .expect("Failed to build Tokio runtime");
 
-        // Clone for each task
-        let runnable = self.inner.clone();
-
-        // Spawn the main server task on the runtime
-        runtime.spawn(async move {
-            match runnable {
-                Runnable::Client(c) => {
-                    c.tokio_serve().await
-                },
-
-                Runnable::Server(s) => {
-                    anyhow::bail!("Server not available on Tokio");
-                }
-            }
-        });
-
-        runtime
-    }
-}
+// impl TokioRunnable {
+//     /// Start the TokioRunnable with the specified number of worker threads.
+//     /// Returns the Tokio Runtime that can be used to manage the application lifetime.
+//     pub fn start(&self, parallelism: usize) -> anyhow::Result<Runtime> {
+//         tracing::debug!("Starting TokioRunnable with {} threads", parallelism);
+//
+//         // Build a multi-threaded Tokio runtime
+//         let runtime = RuntimeBuilder::new_multi_thread()
+//             .worker_threads(parallelism)
+//             .enable_all()
+//             .build()
+//             .map_err(|e| anyhow::anyhow!("Failed to build Tokio runtime: {}", e))?;
+//
+//         match self {
+//             TokioRunnable::Client(relay) => {
+//                 let relay_clone = relay.clone();
+//
+//                 // Spawn the relay service on the runtime
+//                 runtime.spawn(async move {
+//                     info!("Starting Shadow-TLS client relay service");
+//                     if let Err(e) = relay_clone.serve().await {
+//                         tracing::error!("Shadow-TLS relay service error: {}", e);
+//                     }
+//                 });
+//             }
+//         }
+//
+//         Ok(runtime)
+//     }
+// }
 
 impl Runnable {
     async fn serve(self) -> anyhow::Result<()> {

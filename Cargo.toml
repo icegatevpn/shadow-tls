@@ -9,13 +9,18 @@ readme = "README.md"
 repository = "https://github.com/ihciah/shadow-tls"
 version = "0.2.25"
 
-#[lib]
-#name = "shadow_tls"
-#crate-type = ["cdylib"]
-#
-#[[bin]]
-#name = "shadow-tls"
-#path = "src/main.rs"
+
+[[bin]]
+name = "tokio_client"
+path = "src/tokio_client.rs"
+
+[[bin]]
+name = "test_things"
+path = "src/test_things.rs"
+
+[workspace]
+members = ["crates/tokio_client"]
+
 
 [dependencies]
 #monoio = { version = "0.2.4", features = ["sync"] }
@@ -40,7 +45,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 webpki-roots = "0.26"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1.44.1", features = ["rt", "net", "rt-multi-thread", "io-util", "macros"] }
+tokio = { version = "1.44.1", features = ["rt", "net", "rt-multi-thread", "io-util", "macros", "time", "process", "signal"] }
 socket2 = "0.5.9"
 env_logger = "0.11.8"
 

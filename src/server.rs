@@ -186,6 +186,7 @@ impl ShadowTlsServer {
 
     /// Main relay for V2 protocol.
     async fn relay_v2(&self, in_stream: TcpStream) -> anyhow::Result<()> {
+        tracing::info!("Server Relay V2 protocol");
         // wrap in_stream with hash layer
         let mut in_stream = HashedWriteStream::new(in_stream, self.password.as_bytes())?;
         let mut hmac = in_stream.hmac_handler();
@@ -259,6 +260,7 @@ impl ShadowTlsServer {
 
     /// Main relay for V3 protocol.
     async fn relay_v3(&self, mut in_stream: TcpStream) -> anyhow::Result<()> {
+        tracing::info!("Server Relay V3 protocol");
         // stage 1.1: read and validate client hello
         let first_client_frame = read_exact_frame(&mut in_stream).await?;
         let (client_hello_pass, sni) = verified_extract_sni(&first_client_frame, &self.password);

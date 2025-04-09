@@ -13,6 +13,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
     net::TcpStream,
 };
+use crate::helper_v2::HmacHandler;
 
 // Constants copied from the original project
 const TLS_MAJOR: u8 = 0x03;
@@ -181,6 +182,40 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for HashedWriteStream<S> {
     }
 }
 
+struct StreamlessHmac {
+    hmac: hmac::Hmac<sha1::Sha1>,
+    enabled: bool,
+}
+
+impl StreamlessHmac {
+    pub fn new(password: &[u8]) -> Result<Self> {
+        Ok(Self {
+            hmac: hmac::Hmac::new_from_slice(password).map_err(|_| Error::new(ErrorKind::Other, "Invalid key length"))?,
+            enabled: true,
+        })
+    }
+
+    pub fn hash(&self) -> [u8; 20] {
+        self.hmac
+            .clone()
+            .finalize()
+            .into_bytes()
+            .as_slice()
+            .try_into()
+            .expect("unexpected digest length")
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        if self.enabled {
+            self.hmac.update(data);
+        }
+    }
+
+    pub fn disable(&mut self) {
+        self.enabled = false;
+    }
+}
+
 // A helper struct for handling the switching result
 enum SwitchResult {
     Switch(Vec<u8>),
@@ -190,16 +225,22 @@ enum SwitchResult {
 // Main relay implementation for tokio
 pub struct TokioRelayV2 {
     listen_addr: Arc<String>,
-    target_addr: Arc<String>,
+    sni_addr: Arc<String>,
+    server_addr: Arc<String>,
     password: Arc<String>,
     nodelay: bool,
 }
 
 impl TokioRelayV2 {
-    pub fn new(listen_addr: String, target_addr: String, password: String, nodelay: bool) -> Self {
+    pub fn new(listen_addr: String,
+               sni_addr: String,
+               server_addr: String,
+               password: String,
+               nodelay: bool) -> Self {
         Self {
             listen_addr: Arc::new(listen_addr),
-            target_addr: Arc::new(target_addr),
+            sni_addr: Arc::new(sni_addr),
+            server_addr: Arc::new(server_addr),
             password: Arc::new(password),
             nodelay,
         }
@@ -207,40 +248,47 @@ impl TokioRelayV2 {
 
     pub async fn serve(&self) -> Result<()> {
         let listener = tokio::net::TcpListener::bind(&*self.listen_addr).await?;
-        println!("Listening on: {}", self.listen_addr);
+        tracing::info!("Listening on: {}", self.listen_addr);
 
         loop {
             let (socket, addr) = listener.accept().await?;
-            println!("Accepted connection from: {}", addr);
+            tracing::info!("Accepted connection from: {}", addr);
 
             if self.nodelay {
                 socket.set_nodelay(true)?;
             }
 
-            let target_addr = self.target_addr.clone();
+            let target_addr = self.sni_addr.clone();
+            let data_addr = self.server_addr.clone();
             let password = self.password.clone();
 
             // Spawn a new task to handle this connection
             tokio::spawn(async move {
-                if let Err(e) = Self::handle_connection(socket, &target_addr, &password).await {
+                if let Err(e) = Self::handle_connection(socket, &target_addr, &data_addr, &password).await {
                     eprintln!("Connection error: {}", e);
                 }
-                println!("Connection from {} closed", addr);
+                tracing::info!("Connection from {} closed", addr);
             });
         }
     }
 
-    async fn handle_connection(socket: TcpStream, target_addr: &str, password: &str) -> Result<()> {
+    async fn handle_connection(socket: TcpStream,
+                               target_addr: &str,
+                               data_addr: &str,
+                               password: &str) -> Result<()> {
+        tracing::info!("Handling connection to: {}", &target_addr);
+        let mut hmac_tracker = StreamlessHmac::new(password.as_bytes())?;
+
         // Wrap the incoming stream with HMAC tracking
         let mut stream = HashedWriteStream::new(socket, password.as_bytes())?;
 
         // Connect to the target server
         let target_stream = TcpStream::connect(target_addr).await?;
         if let Err(e) = target_stream.set_nodelay(true) {
-            println!("Warning: Could not set TCP_NODELAY: {}", e);
+            tracing::trace!("Warning: Could not set TCP_NODELAY: {}", e);
         }
 
-        println!("Connected to target server: {}", target_addr);
+        tracing::info!("Connected to target server: {}", target_addr);
 
         // Split the streams
         let (mut in_read, mut in_write) = tokio::io::split(stream);
@@ -251,17 +299,12 @@ impl TokioRelayV2 {
         let switch_result = Self::copy_until_handshake_finished(
             &mut in_read,
             &mut target_write,
-            // We need to get the HMAC handler here
-            // For simplicity in this example, we'll just pass a dummy handler
-            &HashedWriteStream::new(
-                TcpStream::connect(target_addr).await.unwrap(),
-                password.as_bytes()
-            )?,
+            &mut hmac_tracker,
         ).await?;
 
         match switch_result {
             SwitchResult::Switch(data_left) => {
-                println!("Handshake finished, switching to data mode");
+                tracing::trace!("Handshake finished, switching to data mode");
 
                 // Close the current target connection
                 drop(target_read);
@@ -269,9 +312,9 @@ impl TokioRelayV2 {
 
                 // Open a new connection to the real data server
                 // In a real implementation, this would be a different address
-                let data_server = TcpStream::connect(target_addr).await?;
+                let data_server = TcpStream::connect(data_addr).await?;
                 if let Err(e) = data_server.set_nodelay(true) {
-                    println!("Warning: Could not set TCP_NODELAY on data connection: {}", e);
+                    tracing::trace!("Warning: Could not set TCP_NODELAY on data connection: {}", e);
                 }
 
                 // Write any pending data
@@ -289,7 +332,7 @@ impl TokioRelayV2 {
                 b?;
             },
             SwitchResult::DirectProxy => {
-                println!("Direct proxy mode activated");
+                tracing::trace!("Direct proxy mode activated");
 
                 // Just relay data as-is without switching
                 let (a, b) = tokio::join!(
@@ -303,7 +346,7 @@ impl TokioRelayV2 {
             }
         }
 
-        println!("Connection handling complete");
+        tracing::trace!("Connection handling complete");
         Ok(())
     }
 
@@ -311,7 +354,7 @@ impl TokioRelayV2 {
     async fn copy_until_handshake_finished<R, W>(
         read_half: &mut R,
         write_half: &mut W,
-        hmac_handler: &HashedWriteStream<TcpStream>,
+        hmac_tracker: &mut StreamlessHmac,
     ) -> Result<SwitchResult>
     where
         R: AsyncRead + Unpin,
@@ -342,7 +385,7 @@ impl TokioRelayV2 {
 
             // Parse the header
             let data_size = u16::from_be_bytes([header_buf[3], header_buf[4]]) as usize;
-            println!("Read header with type {} and length {}", header_buf[0], data_size);
+            tracing::debug!("Read header with type {} and length {}", header_buf[0], data_size);
 
             // Handle based on content type
             if header_buf[0] != APPLICATION_DATA
@@ -350,6 +393,7 @@ impl TokioRelayV2 {
                 || !has_seen_change_cipher_spec
                 || data_size < HMAC_SIZE_V2
             {
+                tracing::trace!("I'm in here");
                 // Validate the TLS frame
                 let valid = (has_seen_handshake || header_buf[0] == HANDSHAKE)
                     && header_buf[1] == TLS_MAJOR
@@ -361,19 +405,26 @@ impl TokioRelayV2 {
                 if header_buf[0] == HANDSHAKE {
                     has_seen_handshake = true;
                 }
-
+                tracing::trace!("Copy the data!");
                 // Copy the data part
                 let mut remaining = data_size;
                 while remaining > 0 {
                     let read_size = remaining.min(data_buf.len());
                     let buf = &mut data_buf[..read_size];
+
                     read_half.read_exact(buf).await?;
+
+                    // Update HMAC state with the data
+                    if header_buf[0] == HANDSHAKE {
+                        hmac_tracker.update(buf);
+                    }
+
                     write_half.write_all(buf).await?;
                     remaining -= read_size;
                 }
 
                 if !valid {
-                    println!("Early invalid TLS: header {:?}", &header_buf[..3]);
+                    tracing::trace!("Early invalid TLS: header {:?}", &header_buf[..3]);
                     return Ok(SwitchResult::DirectProxy);
                 }
 
@@ -385,7 +436,7 @@ impl TokioRelayV2 {
             write_half.write_all(&data_hmac_buf).await?;
 
             // Check HMAC
-            let hash = hmac_handler.hash();
+            let hash = hmac_tracker.hash();
             let mut hash_trim = [0; HMAC_SIZE_V2];
             hash_trim.copy_from_slice(&hash[..HMAC_SIZE_V2]);
 
@@ -400,7 +451,7 @@ impl TokioRelayV2 {
             received_hmac.copy_from_slice(&data_hmac_buf);
 
             if hashes.contains(&received_hmac) {
-                println!("HMAC matches");
+                tracing::trace!("HMAC matches");
 
                 // Read the rest of the data as pure data
                 let mut pure_data = vec![0; data_size - HMAC_SIZE_V2];
@@ -423,14 +474,11 @@ impl TokioRelayV2 {
             }
 
             if application_data_count > 3 {
-                println!("HMAC not matches after 3 times, fallback to direct");
+                tracing::trace!("HMAC not matches after 3 times, fallback to direct");
                 return Ok(SwitchResult::DirectProxy);
             }
         }
     }
-
-    // Additional helper functions would go here
-    // Such as copy_with_application_data, copy_without_application_data, etc.
 }
 
 // Helper function to copy_with_application_data

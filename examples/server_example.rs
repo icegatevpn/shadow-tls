@@ -1,39 +1,29 @@
-#![feature(type_alias_impl_trait)]
-
-use std::{collections::HashMap, path::PathBuf, process::exit};
-use std::error::Error;
-use std::sync::Arc;
-use clap::{Parser, Subcommand, ValueEnum};
-use rustls_fork_shadow_tls::{ClientConfig, OwnedTrustAnchor, RootCertStore, ServerName};
-use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
-
-use shadow_tls::{
-    sip003::parse_sip003_options, RunningArgs, TlsAddrs, TlsExtConfig, TlsNames, V3Mode,
-    WildcardSNI,
-};
-
+use crate::Commands::{Client, Server};
+use clap::{Parser, Subcommand};
 use serde::Deserialize;
-use tokio::net::TcpStream;
-use shadow_tls::tokio_relay_v2::TokioShadowTlsV2Relay;
-// use shadow_tls::tokio_relay_v2::{HashedReadStream, TokioRelayV2};
-use shadow_tls::tokio_rustls_fork_shadow_tls_also::TlsConnector;
+use shadow_tls::{RunningArgs, TlsAddrs, TlsExtConfig, TlsNames, TokioRunnable, V3Mode, WildcardSNI};
+use std::path::PathBuf;
+use std::process::exit;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter};
 
-#[derive(Parser, Debug, Deserialize)]
-#[clap(
-    author,
-    version,
-    about,
-    long_about = "A proxy to expose real tls handshake to the firewall.\nGithub: github.com/ihciah/shadow-tls"
-)]
-pub struct Args {
-    #[clap(subcommand)]
-    #[serde(flatten)]
-    cmd: Commands,
-    #[clap(flatten)]
-    #[serde(flatten)]
-    opts: Opts,
+// If I can build and run this, then I'm good!
+/*
+Start shadow-tls server with: SERVER:
+./shadow-tls server --listen 127.0.0.1:4432 --server 127.0.0.1:8888 --tls captive.apple.com --password pwd1
+
+TEST:
+curl --proxy 127.0.0.1:666 www.google.com
+ */
+
+fn parse_client_names(addrs: &str) -> anyhow::Result<TlsNames> {
+    TlsNames::try_from(addrs)
 }
-
+fn parse_server_addrs(arg: &str) -> anyhow::Result<TlsAddrs> {
+    TlsAddrs::try_from(arg)
+}
 macro_rules! default_function {
     ($name: ident, $type: ident, $val: expr) => {
         fn $name() -> $type {
@@ -41,13 +31,10 @@ macro_rules! default_function {
         }
     };
 }
-
-// default_function!(default_true, bool, true);
 default_function!(default_false, bool, false);
 default_function!(default_8080, String, "[::1]:8080".to_string());
 default_function!(default_443, String, "[::]:443".to_string());
 default_function!(default_wildcard_sni, WildcardSNI, WildcardSNI::Off);
-
 #[derive(Parser, Debug, Default, Clone, Deserialize)]
 struct Opts {
     #[clap(short, long, help = "Set parallelism manually")]
@@ -65,7 +52,6 @@ struct Opts {
     #[clap(long, help = "Strict mode(only for v3 protocol)")]
     strict: bool,
 }
-
 #[derive(Subcommand, Debug, Deserialize)]
 enum Commands {
     #[clap(about = "Run client side")]
@@ -137,14 +123,21 @@ enum Commands {
     },
 }
 
-fn parse_client_names(addrs: &str) -> anyhow::Result<TlsNames> {
-    TlsNames::try_from(addrs)
+#[derive(Parser, Debug, Deserialize)]
+#[clap(
+    author,
+    version,
+    about,
+    long_about = "A proxy to expose real tls handshake to the firewall.\nGithub: github.com/ihciah/shadow-tls"
+)]
+pub struct Args {
+    #[clap(subcommand)]
+    #[serde(flatten)]
+    cmd: Commands,
+    #[clap(flatten)]
+    #[serde(flatten)]
+    opts: Opts,
 }
-
-fn parse_server_addrs(arg: &str) -> anyhow::Result<TlsAddrs> {
-    TlsAddrs::try_from(arg)
-}
-
 fn read_config_file(filename: String) -> Args {
     let file = std::fs::File::open(filename);
     match file {
@@ -161,7 +154,14 @@ fn read_config_file(filename: String) -> Args {
         },
     }
 }
-
+fn get_parallelism(args: &Args) -> usize {
+    if let Some(n) = args.opts.threads {
+        return n as usize;
+    }
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
 impl From<Args> for RunningArgs {
     fn from(args: Args) -> Self {
         let v3 = match (args.opts.v3, args.opts.strict) {
@@ -212,112 +212,32 @@ impl From<Args> for RunningArgs {
     }
 }
 
-// SIP003 [https://shadowsocks.org/en/wiki/Plugin.html](https://shadowsocks.org/en/wiki/Plugin.html)
-pub(crate) fn get_sip003_arg() -> Option<Args> {
-    macro_rules! env {
-        ($key: expr) => {
-            match std::env::var($key).ok() {
-                None => return None,
-                Some(val) if val.is_empty() => return None,
-                Some(val) => val,
-            }
-        };
-        ($key: expr, $fail_fn: expr) => {
-            match std::env::var($key).ok() {
-                None => return None,
-                Some(val) if val.is_empty() => {
-                    $fail_fn;
-                    return None;
-                }
-                Some(val) => val,
-            }
-        };
-        (optional $key: expr) => {
-            match std::env::var($key).ok() {
-                None => "".to_string(),
-                Some(val) if val.is_empty() => "".to_string(),
-                Some(val) => val,
-            }
-        };
-    }
-    let config_file = env!(optional "CONFIG_FILE");
-    if !config_file.is_empty() {
-        return Some(read_config_file(config_file));
-    }
-    let ss_remote_host = env!("SS_REMOTE_HOST");
-    let ss_remote_port = env!("SS_REMOTE_PORT");
-    let ss_local_host = env!("SS_LOCAL_HOST");
-    let ss_local_port = env!("SS_LOCAL_PORT");
-    #[allow(unreachable_code)]
-    let ss_plugin_options = env!("SS_PLUGIN_OPTIONS", {
-        tracing::error!("need SS_PLUGIN_OPTIONS when as SIP003 plugin");
-        exit(-1);
-    });
-
-    let opts = parse_sip003_options(&ss_plugin_options).unwrap();
-    let opts: HashMap<_, _> = opts.into_iter().collect();
-
-    let threads = opts.get("threads").map(|s| s.parse::<u8>().unwrap());
-    let v3 = opts.get("v3").is_some();
-    let passwd = opts
-        .get("passwd")
-        .expect("need passwd param(like passwd=123456)");
-
-    let args_opts = crate::Opts {
-        threads,
-        v3,
-        ..Default::default()
+fn test_server_args() -> Args {
+    let args = Args {
+        cmd: Server {
+            listen: "127.0.0.1:4432".to_string(),
+            server_addr: "127.0.0.1:8888".to_string(),
+            tls_addr: TlsAddrs::try_from("captive.apple.com").unwrap(),//TlsNames::try_from("captive.apple.com").unwrap(),
+            password: "pwd1".to_string(),
+            wildcard_sni: Default::default(),
+        },
+        opts: Default::default(),
     };
-    let args = if opts.get("server").is_some() {
-        let tls_addr = opts
-            .get("tls")
-            .expect("tls param must be specified(like tls=xxx.com:443)");
-        let tls_addrs = parse_server_addrs(tls_addr)
-            .expect("tls param parse failed(like tls=xxx.com:443 or tls=yyy.com:1.2.3.4:443;zzz.com:443;xxx.com)");
-        let wildcard_sni =
-            WildcardSNI::from_str(opts.get("tls").map(AsRef::as_ref).unwrap_or_default(), true)
-                .expect("wildcard_sni format error");
-        Args {
-            cmd: crate::Commands::Server {
-                listen: format!("{ss_remote_host}:{ss_remote_port}"),
-                server_addr: format!("{ss_local_host}:{ss_local_port}"),
-                tls_addr: tls_addrs,
-                password: passwd.to_owned(),
-                wildcard_sni,
-            },
-            opts: args_opts,
-        }
-    } else {
-        let host = opts
-            .get("host")
-            .expect("need host param(like host=www.baidu.com)");
-        let hosts = parse_client_names(host).expect("tls names parse failed");
-        Args {
-            cmd: crate::Commands::Client {
-                listen: format!("{ss_local_host}:{ss_local_port}"),
-                server_addr: format!("{ss_remote_host}:{ss_remote_port}"),
-                tls_names: hosts,
-                password: passwd.to_owned(),
-                alpn: Default::default(),
-            },
-            opts: args_opts,
-        }
-    };
-    Some(args)
+    args
 }
 
-// fn main() {
 fn main() {
     tracing_subscriber::registry()
         .with(fmt::layer())
         .with(
             EnvFilter::builder()
-                .with_default_directive(LevelFilter::TRACE.into())
+                .with_default_directive(LevelFilter::DEBUG.into())
                 .from_env_lossy()
                 .add_directive("rustls=off".parse().unwrap()),
         )
         .init();
-    let mut args = get_sip003_arg().unwrap_or_else(Args::parse);
+    let mut args = test_server_args();
+
     if let Commands::Config { config } = args.cmd {
         args = read_config_file(config.to_str().unwrap().to_string());
     }
@@ -333,13 +253,4 @@ fn main() {
             tracing::error!("Thread exit: {e}");
         }
     });
-}
-
-fn get_parallelism(args: &Args) -> usize {
-    if let Some(n) = args.opts.threads {
-        return n as usize;
-    }
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
 }

@@ -273,6 +273,7 @@ impl ShadowTlsClient {
 
     /// Main relay for V2 protocol.
     async fn relay_v2(&self, in_stream: TcpStream) -> anyhow::Result<()> {
+        tracing::info!("Client Relay V2 protocol");
         let (out_stream, hash, session) = self.connect_v2().await?;
         let mut hash_8b = [0; 8];
         unsafe { std::ptr::copy_nonoverlapping(hash.as_ptr(), hash_8b.as_mut_ptr(), 8) };
@@ -289,6 +290,7 @@ impl ShadowTlsClient {
 
     /// Main relay for V3 protocol.
     async fn relay_v3(&self, in_stream: TcpStream) -> anyhow::Result<()> {
+        tracing::info!("Client Relay V2 protocol");
         let addr = resolve(&self.target_addr).await?;
         let mut stream = TcpStream::connect_addr_with_config(
             addr,

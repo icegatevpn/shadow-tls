@@ -1,0 +1,23 @@
+[package]
+name = "tokio_client"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "tokio_client"
+crate-type = ["staticlib", "cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+rustls-fork-shadow-tls = { version = "0.20.9-mod.2", default-features = false }
+clap = { version = "4.5.35", features = ["derive"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0.97"
+tokio = { version = "1.44.1", features = ["rt", "net", "rt-multi-thread", "io-util", "macros", "time", "process", "signal"] }
+tracing = "0.1.41"
+serde = { version = "1.0.219", features = ["derive"] }
+rustc-hash = "2.1.1"
+rand = "0.9.0"
+byteorder = "1.5.0"
+hmac = "0.13.0-pre.5"
+sha1 = "0.11.0-pre.5"
