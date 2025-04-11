@@ -154,14 +154,14 @@ fn read_config_file(filename: String) -> Args {
         },
     }
 }
-fn get_parallelism(args: &Args) -> usize {
-    if let Some(n) = args.opts.threads {
-        return n as usize;
-    }
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-}
+// fn get_parallelism(args: &Args) -> usize {
+//     if let Some(n) = args.opts.threads {
+//         return n as usize;
+//     }
+//     std::thread::available_parallelism()
+//         .map(|n| n.get())
+//         .unwrap_or(1)
+// }
 impl From<Args> for RunningArgs {
     fn from(args: Args) -> Self {
         let v3 = match (args.opts.v3, args.opts.strict) {

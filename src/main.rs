@@ -1,10 +1,7 @@
 #![feature(type_alias_impl_trait)]
 
 use std::{collections::HashMap, path::PathBuf, process::exit};
-use std::error::Error;
-use std::sync::Arc;
 use clap::{Parser, Subcommand, ValueEnum};
-use rustls_fork_shadow_tls::{ClientConfig, OwnedTrustAnchor, RootCertStore, ServerName};
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use shadow_tls::{
@@ -13,10 +10,6 @@ use shadow_tls::{
 };
 
 use serde::Deserialize;
-use tokio::net::TcpStream;
-use shadow_tls::tokio_relay_v2::TokioShadowTlsV2Relay;
-// use shadow_tls::tokio_relay_v2::{HashedReadStream, TokioRelayV2};
-use shadow_tls::tokio_rustls_fork_shadow_tls_also::TlsConnector;
 
 #[derive(Parser, Debug, Deserialize)]
 #[clap(

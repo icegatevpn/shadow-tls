@@ -4,12 +4,90 @@ use rustls_fork_shadow_tls::ServerName;
 use serde::Deserialize;
 use std::convert::TryFrom;
 use std::fmt::Display;
+use clap::{Parser, Subcommand};
 use tokio::runtime::{Builder as RuntimeBuilder, Handle, Runtime};
 use tracing::{debug, info};
 pub mod tokio_relay_v2;
 
+#[derive(Parser, Debug, Default, Clone)]
+pub struct Opts {
+    #[clap(short, long, help = "Set parallelism manually")]
+    threads: Option<u8>,
+    #[clap(long, help = "Disable TCP_NODELAY")]
+    #[clap(default_value_t = false)]
+    disable_nodelay: bool,
+    #[clap(long, help = "Enable TCP_FASTOPEN")]
+    #[clap(default_value_t = false)]
+    fastopen: bool,
+    #[clap(long, help = "Use v3 protocol")]
+    #[clap(default_value_t = false)]
+    v3: bool,
+    #[clap(long, help = "Strict mode(only for v3 protocol)")]
+    #[clap(default_value_t = false)]
+    strict: bool,
+}
+
+#[derive(Parser, Debug)]
+#[clap(
+    author,
+    version,
+    about,
+    long_about = "A proxy to expose real tls handshake to the firewall with Tokio."
+)]
+pub struct Args {
+    #[clap(subcommand)]
+    pub cmd: Commands,
+    #[clap(flatten)]
+    pub opts: Opts,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    #[clap(about = "Run client side with Tokio")]
+    Client {
+        #[clap(
+            long = "listen",
+            default_value = "[::1]:8080",
+            help = "Shadow-tls client listen address(like \"[::1]:8080\")"
+        )]
+        listen: String,
+        #[clap(
+            long = "server",
+            help = "Your shadow-tls server address(like \"1.2.3.4:443\")"
+        )]
+        server_addr: String,
+        #[clap(
+            long = "sni",
+            help = "TLS handshake SNIs(like \"cloud.tencent.com\", \"captive.apple.com;cloud.tencent.com\")",
+            value_parser = parse_client_names
+        )]
+        tls_names: TlsNames,
+        #[clap(long = "password", help = "Password")]
+        password: String,
+        #[clap(
+            long = "alpn",
+            help = "Application-Layer Protocol Negotiation list(like \"http/1.1\", \"http/1.1;h2\")",
+            value_delimiter = ';'
+        )]
+        alpn: Option<Vec<String>>,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TlsNames(Vec<ServerName>);
+
+pub fn parse_client_names(addrs: &str) -> anyhow::Result<TlsNames> {
+    TlsNames::try_from(addrs)
+}
+
+pub fn get_parallelism(args: &Args) -> usize {
+    if let Some(n) = args.opts.threads {
+        return n as usize;
+    }
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+}
 
 impl TlsNames {
     #[inline]
@@ -125,10 +203,9 @@ impl TokioRunnable {
     ///
     /// This method is designed to be used with an existing Tokio runtime,
     /// such as the one created by #[tokio::main].
-    pub fn run_on_runtime(&self, handle: &Handle, parallelism: usize) -> anyhow::Result<()> {
+    pub fn run_on_runtime(&self, handle: &Handle) -> anyhow::Result<()> {
         tracing::debug!(
-            "Running TokioRunnable on provided runtime with {} threads",
-            parallelism
+            "Running TokioRunnable on provided runtime",
         );
 
         match self {
@@ -169,7 +246,7 @@ impl TokioRunnable {
             .map_err(|e| anyhow::anyhow!("Failed to build Tokio runtime: {}", e))?;
 
         // Run the service on the new runtime
-        self.run_on_runtime(&runtime.handle(), parallelism)?;
+        self.run_on_runtime(&runtime.handle())?;
 
         Ok(runtime)
     }
@@ -194,6 +271,35 @@ pub enum RunningArgs {
         fastopen: bool,
         v3: V3Mode,
     },
+}
+
+impl From<Args> for RunningArgs {
+    fn from(args: Args) -> Self {
+        let v3 = match (args.opts.v3, args.opts.strict) {
+            (true, true) => V3Mode::Strict,
+            (true, false) => V3Mode::Lossy,
+            (false, _) => V3Mode::Disabled,
+        };
+
+        match args.cmd {
+            Commands::Client {
+                listen,
+                server_addr,
+                tls_names,
+                password,
+                alpn,
+            } => Self::Client {
+                listen_addr: listen,
+                target_addr: server_addr,
+                tls_names,
+                tls_ext: TlsExtConfig::from(alpn),
+                password,
+                nodelay: !args.opts.disable_nodelay,
+                fastopen: args.opts.fastopen,
+                v3,
+            },
+        }
+    }
 }
 impl RunningArgs {
     #[inline]
