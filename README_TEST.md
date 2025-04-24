@@ -41,17 +41,25 @@ I Then run shadow-tls client on my local machine with this:
 Then start sslocal with the following config:
 ```json
 {
-  "server": "127.0.0.1",
-  "server_port": 666,
-  "ipv6_first": false,
-  "ipv6_only": false,
-  "mode": "tcp_and_udp",
-  "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
-  "method": "2022-blake3-aes-256-gcm",
-  "timeout": 300,
-  "udp_timeout": 300,
-  "udp_max_associations": 512,
-  "nameserver": "1.1.1.1",
+  "servers": [{
+    "server": "127.0.0.1",
+    "server_port": 666,
+    "ipv6_first": false,
+    "ipv6_only": false,
+    "mode": "tcp_only",
+    "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
+    "method": "2022-blake3-aes-256-gcm",
+    "timeout": 300
+  },
+    {
+      "server": "45.86.229.176",
+      "server_port": 667,
+      "mode": "udp_only",
+      "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
+      "method": "2022-blake3-aes-256-gcm",
+      "udp_timeout": 300,
+      "udp_max_associations": 512
+    }],
   "locals": [
     {
       "protocol": "tun",
@@ -64,8 +72,7 @@ Then start sslocal with the following config:
   ],
   "log": {
     "level": 1
-  },
-  "old_tun_interface_address": "10.255.0.1/24"
+  }
 }
 ```
 I can then test with the following 'curl' command:
