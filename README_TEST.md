@@ -43,14 +43,29 @@ Then start sslocal with the following config:
 {
   "server": "127.0.0.1",
   "server_port": 666,
-  "rem_server": "45.86.229.176",
-  "rem_server_port": 667,
-  "local_address": "127.0.0.1",
-  "local_port": 1081,
+  "ipv6_first": false,
+  "ipv6_only": false,
+  "mode": "tcp_and_udp",
   "password": "yJxlMnbXB0fpbQ+YfBwmV4GVr1ndRbsEJXdrJFQNeRE=:aj0Wg39ZA/h6dUuZr60T3kMHRpQQDIivPeSOYi397C4=",
   "method": "2022-blake3-aes-256-gcm",
   "timeout": 300,
-  "mode": "tcp_and_udp"
+  "udp_timeout": 300,
+  "udp_max_associations": 512,
+  "nameserver": "1.1.1.1",
+  "locals": [
+    {
+      "protocol": "tun",
+      "tun_interface_name": "utun9",
+      "local_address": "127.0.0.1",
+      "local_port": 1081,
+      "mode": "tcp_and_udp",
+      "outbound_bind_interface": "en0"
+    }
+  ],
+  "log": {
+    "level": 1
+  },
+  "old_tun_interface_address": "10.255.0.1/24"
 }
 ```
 I can then test with the following 'curl' command:
@@ -58,5 +73,31 @@ I can then test with the following 'curl' command:
 `curl --proxy 127.0.0.1:1081 https://api.ipify.org`
 Which replies with the ip address of the shadowsocks server: 45.86.229.176
 
-TODO. I can't seem to get a client/server flow to work if I configure sslocal with a tun interface. 
-we need to figure out how to make that work and then enable device routing through the interface.
+Configure Routing for the new Tun interface:
+```shell
+#!/bin/bash
+TUN_IF="utun9"
+TUN_IP=$(ifconfig "$TUN_IF" | grep 'inet ' | awk '{print $2}')
+SHADOW_TLS_IP="45.86.229.176"
+echo "[*] Setting default route through $TUN_IF ($TUN_IP)..."
+sudo route -n add -net 0.0.0.0/1 -interface "$TUN_IF"
+sudo route -n add -net 128.0.0.0/1 -interface "$TUN_IF"
+echo "[*] Excluding localhost and Shadow-TLS server IP..."
+sudo route -n add "$SHADOW_TLS_IP" $(route get default | awk '/gateway/ { print $2 }')
+echo "[✓] Routing updated. All traffic now flows through Shadowsocks TUN, except Shadow-TLS."
+```
+
+Clean up routing after kill sslocal
+```shell
+#!/bin/bash
+TUN_IF="utun9"
+SHADOW_TLS_IP="45.86.229.176"
+echo "[*] Removing default split routes through $TUN_IF..."
+sudo route -n delete -net 0.0.0.0/1 -interface "$TUN_IF"
+sudo route -n delete -net 128.0.0.0/1 -interface "$TUN_IF"
+echo "[*] Removing manual route to Shadow-TLS server..."
+sudo route -n delete "$SHADOW_TLS_IP"
+echo "[✓] Routing reverted. System back to default."
+```
+
+# TODO UDP packets seem to be failing.
