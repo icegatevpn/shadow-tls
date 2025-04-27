@@ -3,13 +3,13 @@ use std::{
     io::{Error, ErrorKind, Result},
     sync::Arc,
 };
-
 use byteorder::{BigEndian, WriteBytesExt};
 use hmac::{KeyInit, Mac};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
 };
+use tracing::error;
 
 // Constants from the original project
 const TLS_MAJOR: u8 = 0x03;
@@ -67,6 +67,7 @@ impl TokioShadowTlsV2Relay {
         while bytes_read < buf.len() {
             let n = client.read(&mut buf[bytes_read..]).await?;
             if n == 0 {
+                tracing::error!("ERRRRRrrrrrr");
                 // End of stream
                 return Err(Error::new(
                     ErrorKind::UnexpectedEof,
@@ -160,7 +161,7 @@ impl TokioShadowTlsV2Relay {
             .map_err(|_| Error::new(ErrorKind::Other, "Invalid key length"))?;
 
         // Connect to the handshake server
-        let mut handshake_server = TcpStream::connect(target_addr).await?;
+        let mut handshake_server = TcpStream::connect("captive.apple.com:443").await?;//TcpStream::connect(target_addr).await?;
         if let Ok(_) = handshake_server.set_nodelay(true) {} // Best effort
 
         tracing::trace!("Connected to handshake server: {}", target_addr);

@@ -218,58 +218,6 @@ impl ShadowTlsClient {
             }
         }
     }
-    async fn tokio_relay_v2(
-        client: Arc<ShadowTlsClient>,
-        in_stream: tokio::net::TcpStream,
-    ) -> anyhow::Result<()> {
-        // This is where we'll implement the V2 protocol relay using Tokio
-        // For now, just return an error
-        anyhow::bail!("Tokio V2 protocol not implemented yet")
-    }
-
-    async fn tokio_relay_v3(
-        client: Arc<ShadowTlsClient>,
-        in_stream: tokio::net::TcpStream,
-    ) -> anyhow::Result<()> {
-        // This is where we'll implement the V3 protocol relay using Tokio
-        // For now, just return an error
-        anyhow::bail!("Tokio V3 protocol not implemented yet")
-    }
-    pub async fn tokio_serve(self) -> anyhow::Result<()> {
-        let address = &*self.listen_addr.clone();
-        let shared = Arc::new(self);
-        let listener = tokio::net::TcpListener::bind(&address.clone()).await?;
-        tracing::info!("Started Tokio Shadow-TLS client on {}", &address);
-        loop {
-            match listener.accept().await {
-                Ok((mut conn, addr)) => {
-                    tracing::info!("Accepted a connection from {addr}");
-                    if let Err(e) = tokio_mod_tcp_conn(&mut conn, true, shared.nodelay) {
-                        tracing::warn!("Failed to configure connection: {e}");
-                    }
-
-                    let client = shared.clone();
-                    // Spawn a Tokio task for this connection
-                    tokio::spawn(async move {
-                        let result = match client.v3.enabled() {
-                            false => ShadowTlsClient::tokio_relay_v2(client, conn).await,
-                            true => ShadowTlsClient::tokio_relay_v3(client, conn).await,
-                        };
-
-                        if let Err(e) = result {
-                            tracing::error!("Relay error for {addr}: {e}");
-                        }
-
-                        tracing::info!("Relay for {addr} finished");
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Accept failed: {e}");
-                }
-            }
-        }
-    }
-
 
     /// Main relay for V2 protocol.
     async fn relay_v2(&self, in_stream: TcpStream) -> anyhow::Result<()> {
@@ -290,7 +238,7 @@ impl ShadowTlsClient {
 
     /// Main relay for V3 protocol.
     async fn relay_v3(&self, in_stream: TcpStream) -> anyhow::Result<()> {
-        tracing::info!("Client Relay V2 protocol");
+        tracing::info!("Client Relay V3 protocol");
         let addr = resolve(&self.target_addr).await?;
         let mut stream = TcpStream::connect_addr_with_config(
             addr,

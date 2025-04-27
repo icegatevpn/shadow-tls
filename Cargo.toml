@@ -19,7 +19,7 @@ name = "test_things"
 path = "src/test_things.rs"
 
 [workspace]
-members = ["crates/tokio_client"]
+members = ["crates/tokio_client_1", "crates/tokio_client_2"]
 
 
 [dependencies]

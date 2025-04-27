@@ -23,15 +23,11 @@ fn default_443() -> String {
 
 
 
-
-
-
-
 fn test_client_args() -> Args {
     let args = Args {
         cmd: Client {
             listen: "127.0.0.1:666".to_string(),
-            server_addr: "127.0.0.1:4432".to_string(),
+            server_addr: "127.0.0.1:4433".to_string(),
             tls_names: TlsNames::try_from("captive.apple.com").unwrap(),
             password: "pwd1".to_string(),
             alpn: None,
@@ -48,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
         .with(fmt::layer())
         .with(
             EnvFilter::builder()
-                .with_default_directive(LevelFilter::DEBUG.into())
+                .with_default_directive(LevelFilter::TRACE.into())
                 .from_env_lossy()
                 .add_directive("rustls=off".parse().unwrap()),
         )
