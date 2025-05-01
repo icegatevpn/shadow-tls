@@ -220,7 +220,7 @@ impl ShadowTlsClient {
     }
 
     /// Main relay for V2 protocol.
-    async fn relay_v2(&self, in_stream: TcpStream) -> anyhow::Result<()> {
+    async fn relay_v2(&self, in_stream: TcpStream) -> anyhow::Result<()> { // in_stream is local shadowsocks connection
         tracing::info!("Client Relay V2 protocol");
         let (out_stream, hash, session) = self.connect_v2().await?;
         let mut hash_8b = [0; 8];

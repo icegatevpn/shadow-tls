@@ -3,10 +3,19 @@ name = "shadow-tls-tokio"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "shadowTlsTokioLib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shadow-tls-tokio"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { version = "1.44.2", features = ["full"] }
 tokio-rustls = "0.24"
 rustls = { version = "0.21", features = ["dangerous_configuration"] }
+rustls-fork-shadow-tls = { version = "0.20.9-mod.2", default-features = false }
 rustls-pemfile = "1.0"
 clap = { version = "4.4", features = ["derive"] }
 rand = "0.8"
@@ -20,3 +29,7 @@ bytes = "1.10.1"
 log = "0.4.27"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1.41"
+windows-sys = "0.59.0"
+libc = "0.2.171"
+memchr = "2.7.4"
+socket2 = "0.5.9"

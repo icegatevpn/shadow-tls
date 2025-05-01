@@ -1,7 +1,17 @@
 // Improved shadow-tls client implementation with better TLS record handling
 
+mod buf;
+mod io;
+mod driver;
+mod net;
+mod utils;
+mod fs;
+mod macros;
+
+use std::io as std_io;
+use std_io::{ErrorKind};
+
 use std::{
-    io::{self, ErrorKind},
     sync::Arc,
     time::Duration,
 };
@@ -14,19 +24,18 @@ use tokio::{
 use bytes::{BytesMut, BufMut};
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
-use tokio_rustls::{
-    rustls::{
-        Certificate, ClientConfig, Error as TLSError, OwnedTrustAnchor,
-        RootCertStore, ServerName, client::ServerCertVerifier
-    },
-    TlsConnector,
-};
+use tokio_rustls::{rustls::{
+    Certificate, ClientConfig, Error as TLSError,
+    ServerName, client::ServerCertVerifier
+}, TlsConnector};
 use rand::seq::SliceRandom;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use clap::Parser;
 use tracing::{debug, error, warn, info};
 use anyhow::{Result, Context as AnyhowContext, anyhow};
+use rustls_fork_shadow_tls::{OwnedTrustAnchor, RootCertStore, ClientConfig as ShadowClientConfig};
+use shadowTlsTokioLib::BufResult;
 
 /// CLI arguments
 #[derive(Parser, Debug)]
@@ -109,6 +118,37 @@ struct ShadowTlsClient {
 }
 
 impl ShadowTlsClient {
+    /// Convert a rustls_fork_shadow_tls client configuration for use with tokio_rustls
+    pub fn convert_to_tokio_rustls() -> Result<tokio_rustls::TlsConnector> {
+        // Create a new root store and populate it
+        let mut root_store = tokio_rustls::rustls::RootCertStore::empty();
+
+        // Add the Mozilla root certificates
+        root_store.add_server_trust_anchors(
+            webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
+                tokio_rustls::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                    ta.subject.as_ref(),
+                    ta.subject_public_key_info.as_ref(),
+                    ta.name_constraints.as_ref().map(|n| n.as_ref()),
+                )
+            })
+        );
+
+        // Create a new ClientConfig with the root store
+        let config = tokio_rustls::rustls::ClientConfig::builder()
+            .with_safe_default_cipher_suites()
+            .with_safe_default_kx_groups()
+            .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+            .context("Failed to set protocol versions")?
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+
+        // Convert to TlsConnector
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+
+        Ok(connector)
+    }
+
     fn new(cli: Cli) -> Result<Self> {
         // Build root cert store
         let mut root_store = RootCertStore::empty();
@@ -123,18 +163,16 @@ impl ShadowTlsClient {
         );
 
         // Create TLS config
-        let mut config = ClientConfig::builder()
-            .with_safe_default_cipher_suites()
-            .with_safe_default_kx_groups()
-            .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
-            .context("Failed to build TLS protocol versions")?
+        let mut tls_config = rustls_fork_shadow_tls::ClientConfig::builder()
+            .with_safe_defaults()
             .with_root_certificates(root_store)
             .with_no_client_auth();
 
         // IMPORTANT: Disable certificate verification
-        config.dangerous().set_certificate_verifier(Arc::new(NoCertificateVerification {}));
+        // config.dangerous().set_certificate_verifier(Arc::new(NoCertificateVerification {}));
+        let tls_connector = ShadowTlsClient::convert_to_tokio_rustls()?;
 
-        let tls_connector = TlsConnector::from(Arc::new(config));
+        // let tls_connector = TlsConnector::from(Arc::new(tls_config));
         let snis = cli.sni.split(',').map(|s| s.trim().to_string()).collect();
 
         Ok(Self {
@@ -148,12 +186,12 @@ impl ShadowTlsClient {
 
     async fn serve(&self) -> Result<()> {
         let listener = TcpListener::bind(&*self.listen_addr).await?;
-        info!("Listening on {}", self.listen_addr);
+        info!("TC2: Listening on {}", self.listen_addr);
 
         loop {
             match listener.accept().await {
                 Ok((client_stream, peer_addr)) => {
-                    info!("Accepted connection from {}", peer_addr);
+                    info!("TC2: Accepted connection from {}", peer_addr);
 
                     // Set TCP_NODELAY for better performance
                     if let Err(e) = client_stream.set_nodelay(true) {
@@ -195,7 +233,7 @@ impl ShadowTlsClient {
             Ok(n) if n >= 7 => {
                 // Check if it's an HTTP CONNECT request
                 let tmp_buf = &peek_buf[..7];
-                if tmp_buf == b"CONNECT" || tmp_buf == b"connect" {
+                if tmp_buf == b"CONNECT" || tmp_buf == b"connect" || tmp_buf == b"Connect" {
                     self.handle_http_connect(client_stream).await?
                 } else {
                     client_stream
@@ -208,13 +246,13 @@ impl ShadowTlsClient {
         let (server_stream, hash) = self.connect_v2().await?;
 
         // Extract 8-byte tag from the HMAC
-        let mut tag = [0u8; HMAC_SIZE_V2];
-        tag.copy_from_slice(&hash[..HMAC_SIZE_V2]);
+        let mut hash_8b = [0u8; HMAC_SIZE_V2];
+        hash_8b.copy_from_slice(&hash[..HMAC_SIZE_V2]);
 
-        debug!("Handshake complete, starting relay with HMAC tag: {:02x?}", tag);
+        debug!("Handshake complete, starting relay with HMAC tag: {:02x?}", hash_8b);
 
         // Handle bidirectional relay with proper error handling
-        match self.relay_connections(client_stream, server_stream, &tag).await {
+        match self.relay_connections(client_stream, server_stream, &hash_8b).await {
             Ok((client_bytes, server_bytes)) => {
                 info!("Relay completed. Sent {} bytes, received {} bytes",
                       client_bytes, server_bytes);
@@ -336,23 +374,13 @@ impl ShadowTlsClient {
         &self,
         client_stream: TcpStream,
         server_stream: TcpStream,
-        tag: &[u8; HMAC_SIZE_V2]
+        hash_8b: &[u8; HMAC_SIZE_V2]
     ) -> Result<(u64, u64)> {
         // Configure both streams with appropriate settings
         for stream in [&client_stream, &server_stream] {
             if let Err(e) = stream.set_nodelay(true) {
                 debug!("Failed to set TCP_NODELAY: {}", e);
             }
-
-            // // Set larger recv buffer
-            // if let Err(e) = stream.set_recv_buffer_size(256 * 1024) {
-            //     debug!("Failed to set receive buffer size: {}", e);
-            // }
-            //
-            // // Set larger send buffer
-            // if let Err(e) = stream.set_send_buffer_size(256 * 1024) {
-            //     debug!("Failed to set send buffer size: {}", e);
-            // }
         }
 
         // Split streams
@@ -360,9 +388,9 @@ impl ShadowTlsClient {
         let (mut server_read, mut server_write) = tokio::io::split(server_stream);
 
         // Use a proper session filter
-        let tag_clone = tag.clone();
+        let hash_clone = hash_8b.clone();
         let client_to_server = tokio::spawn(async move {
-            copy_client_to_server(&mut client_read, &mut server_write, &tag_clone).await
+            copy_client_to_server(&mut client_read, &mut server_write, &hash_clone).await
         });
 
         let server_to_client = tokio::spawn(async move {
@@ -403,7 +431,7 @@ impl HashedStream {
         Ok(Self {
             inner: stream,
             mac: Hmac::<Sha1>::new_from_slice(key)
-                .map_err(|_| io::Error::new(ErrorKind::InvalidInput, "Invalid key length"))?,
+                .map_err(|_| std_io::Error::new(ErrorKind::InvalidInput, "Invalid key length"))?,
         })
     }
 
@@ -420,7 +448,7 @@ impl AsyncRead for HashedStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
+    ) -> Poll<std_io::Result<()>> {
         let filled_before = buf.filled().len();
         match Pin::new(&mut self.inner).poll_read(cx, buf) {
             Poll::Ready(Ok(())) => {
@@ -445,21 +473,21 @@ impl AsyncWrite for HashedStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
+    ) -> Poll<std_io::Result<usize>> {
         Pin::new(&mut self.inner).poll_write(cx, buf)
     }
 
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
+    ) -> Poll<std_io::Result<()>> {
         Pin::new(&mut self.inner).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
+    ) -> Poll<std_io::Result<()>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
@@ -469,7 +497,7 @@ async fn copy_client_to_server(
     client: &mut (impl AsyncRead + Unpin),
     server: &mut (impl AsyncWrite + Unpin),
     tag: &[u8; HMAC_SIZE_V2],
-) -> io::Result<u64> {
+) -> std_io::Result<u64> {
     let mut total_bytes = 0u64;
 
     // Preallocate a buffer for efficiency
@@ -542,7 +570,7 @@ async fn copy_client_to_server(
 async fn copy_server_to_client(
     server: &mut (impl AsyncRead + Unpin),
     client: &mut (impl AsyncWrite + Unpin),
-) -> io::Result<u64> {
+) -> std_io::Result<u64> {
     let mut total_bytes = 0u64;
     let mut header = [0u8; TLS_HEADER_SIZE];
     let mut buffer = BytesMut::with_capacity(MAX_TLS_RECORD_SIZE);

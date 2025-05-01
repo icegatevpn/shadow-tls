@@ -1211,18 +1211,23 @@ dependencies = [
  "bytes",
  "clap",
  "hmac 0.12.1",
+ "libc",
  "log",
+ "memchr",
  "rand 0.8.5",
  "rustls",
+ "rustls-fork-shadow-tls",
  "rustls-native-certs",
  "rustls-pemfile",
  "sha1 0.10.6",
  "sha2",
+ "socket2",
  "tokio",
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
  "webpki-roots",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
